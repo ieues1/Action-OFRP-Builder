@@ -72,6 +72,14 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
+    - name: Verify Java
+      run: |
+        echo "JAVA_HOME=$JAVA_HOME"
+        if [ -n "$JAVA_HOME" ]; then
+          ls -ld "$JAVA_HOME" || true
+        fi
+        java -version || true
+
     - name: Prepare the build environment
       run: |
         sudo apt update && sudo apt upgrade -y
@@ -81,10 +89,10 @@ jobs:
         git clone "https://gitlab.com/OrangeFox/misc/scripts"
         cd scripts
         # Preserve JAVA_HOME and PATH when running the upstream scripts that rely on Java.
-        # Use --preserve-env to ensure the scripts see the Java installation from actions/setup-java.
-        sudo --preserve-env=JAVA_HOME,PATH bash setup/android_build_env.sh
+        # Use sudo env to explicitly pass JAVA_HOME and PATH into the elevated shell.
+        sudo env JAVA_HOME="$JAVA_HOME" PATH="$PATH" bash setup/android_build_env.sh
         sed -i 's/cd -/cd ../g' setup/install_android_sdk.sh
-        sudo --preserve-env=JAVA_HOME,PATH bash setup/install_android_sdk.sh
+        sudo env JAVA_HOME="$JAVA_HOME" PATH="$PATH" bash setup/install_android_sdk.sh
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     # Setup SSH Keys (use SYNC_URL input name; was referencing MANIFEST_URL)
@@ -178,6 +186,16 @@ jobs:
           echo "Available combos (first 200 lines):"
           printf '%s\n' "$combos" | sed -n '1,200p'
           exit 1
+        fi
+
+        # Normalize LUNCH_CMD to product-release-variant if needed (replace only the first '_' with '-')
+        if [ -n "$LUNCH_CMD" ]; then
+          hyphen_count=$(printf '%s' "$LUNCH_CMD" | awk -F'-' '{print NF-1}')
+          if [ "$hyphen_count" -lt 2 ] && printf '%s' "$LUNCH_CMD" | grep -q '_'; then
+            NORMALIZED=$(printf '%s\n' "$LUNCH_CMD" | sed 's/_/-/')
+            echo "Normalizing lunch combo: '$LUNCH_CMD' -> '$NORMALIZED'"
+            LUNCH_CMD="$NORMALIZED"
+          fi
         fi
 
         echo "Using lunch combo: $LUNCH_CMD"
