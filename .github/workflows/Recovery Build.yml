@@ -80,9 +80,11 @@ jobs:
             git python3 tar aria2
         git clone "https://gitlab.com/OrangeFox/misc/scripts"
         cd scripts
-        sudo bash setup/android_build_env.sh
+        # Preserve JAVA_HOME and PATH when running the upstream scripts that rely on Java.
+        # Use --preserve-env to ensure the scripts see the Java installation from actions/setup-java.
+        sudo --preserve-env=JAVA_HOME,PATH bash setup/android_build_env.sh
         sed -i 's/cd -/cd ../g' setup/install_android_sdk.sh
-        sudo bash setup/install_android_sdk.sh
+        sudo --preserve-env=JAVA_HOME,PATH bash setup/install_android_sdk.sh
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     # Setup SSH Keys (use SYNC_URL input name; was referencing MANIFEST_URL)
@@ -130,9 +132,57 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         set -e
-        lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng" && make clean && mka adbd "${{ github.event.inputs.BUILD_TARGET }}"image -j$(nproc --all)
+
+        # Try to read add_lunch_combo entries from the device tree first, then fallback to whole tree.
+        combos=$(grep -R --line-buffered "add_lunch_combo" "./${{ github.event.inputs.DEVICE_PATH }}" 2>/dev/null \
+                 | sed -E 's/.*add_lunch_combo[[:space:]]*//g' \
+                 | sed -E "s/['\"]//g" \
+                 | awk '{print $1}' \
+                 | sort -u || true)
+
+        if [ -z "$combos" ]; then
+          combos=$(grep -R --line-buffered "add_lunch_combo" . 2>/dev/null \
+                   | sed -E 's/.*add_lunch_combo[[:space:]]*//g' \
+                   | sed -E "s/['\"]//g" \
+                   | awk '{print $1}' \
+                   | sort -u || true)
+        fi
+
+        echo "Available lunch combos (sample):"
+        printf '%s\n' "$combos" | sed -n '1,50p'
+
+        DESIRED="${{ github.event.inputs.MAKEFILE_NAME }}"
+        LUNCH_CMD=""
+
+        # If user supplied a combo-like string with variant, use it directly
+        if printf '%s\n' "$DESIRED" | grep -q -- '-'; then
+          if printf '%s\n' "$combos" | grep -qx "$DESIRED"; then
+            LUNCH_CMD="$DESIRED"
+          fi
+        else
+          # try common suffixes
+          for suf in eng userdebug user; do
+            if printf '%s\n' "$combos" | grep -qx "${DESIRED}-${suf}"; then
+              LUNCH_CMD="${DESIRED}-${suf}"
+              break
+            fi
+          done
+          # fallback: fuzzy match
+          if [ -z "$LUNCH_CMD" ]; then
+            LUNCH_CMD=$(printf '%s\n' "$combos" | grep -i "$DESIRED" | head -n1 || true)
+          fi
+        fi
+
+        if [ -z "$LUNCH_CMD" ]; then
+          echo "ERROR: no matching lunch combo found for '${DESIRED}'."
+          echo "Available combos (first 200 lines):"
+          printf '%s\n' "$combos" | sed -n '1,200p'
+          exit 1
+        fi
+
+        echo "Using lunch combo: $LUNCH_CMD"
+        lunch "$LUNCH_CMD" && make clean && mka adbd "${{ github.event.inputs.BUILD_TARGET }}"image -j$(nproc --all)
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-      continue-on-error: true
 
     - name: Check the output directory before uploading
       run: |
