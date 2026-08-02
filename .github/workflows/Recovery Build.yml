@@ -1,6 +1,4 @@
-<content>
 name: Recovery Build
-
 on:
   workflow_dispatch:
     inputs:
@@ -216,4 +214,3 @@ jobs:
           Target: ${{ github.event.inputs.BUILD_TARGET }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-</content>
