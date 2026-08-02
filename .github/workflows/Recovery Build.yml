@@ -1,3 +1,4 @@
+<content>
 name: Recovery Build
 
 on:
@@ -50,11 +51,9 @@ jobs:
       contents: write
     steps:
 
-    # You might want to Checkout your repo first, but not mandatory
     - name: Check Out
       uses: actions/checkout@v4
 
-    # Cleanup The Actions Workspace Using Custom Composite Run Actions
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
 
@@ -65,7 +64,6 @@ jobs:
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
       id: pwd
 
-    # Ensure a valid Java is present BEFORE running repo/setup scripts that depend on JAVA_HOME
     - name: Install OpenJDK (Temurin 17)
       uses: actions/setup-java@v4
       with:
@@ -88,14 +86,11 @@ jobs:
             git python3 tar aria2
         git clone "https://gitlab.com/OrangeFox/misc/scripts"
         cd scripts
-        # Preserve JAVA_HOME and PATH when running the upstream scripts that rely on Java.
-        # Use sudo env to explicitly pass JAVA_HOME and PATH into the elevated shell.
         sudo env JAVA_HOME="$JAVA_HOME" PATH="$PATH" bash setup/android_build_env.sh
         sed -i 's/cd -/cd ../g' setup/install_android_sdk.sh
         sudo env JAVA_HOME="$JAVA_HOME" PATH="$PATH" bash setup/install_android_sdk.sh
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-    # Setup SSH Keys (use SYNC_URL input name; was referencing MANIFEST_URL)
     - name: Setup SSH Keys
       if: ${{ startsWith(github.event.inputs.SYNC_URL, 'git@github.com') || 
           startsWith(github.event.inputs.DEVICE_TREE_URL, 'git@github.com') ||
@@ -108,8 +103,6 @@ jobs:
     - name: Sync OrangeFox sources and minimal manifest
       run: |
         cd "${{ steps.pwd.outputs.workspace-folder }}"
-        # Optional debug: enable tracing by uncommenting the next line
-        # set -x
         git clone "${{ github.event.inputs.SYNC_URL }}"
         cd sync
         ./orangefox_sync.sh --branch "${{ github.event.inputs.MANIFEST_BRANCH }}" --path "${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
@@ -133,6 +126,18 @@ jobs:
       with:
         swap-size-gb: 12
 
+    - name: Debug manifest & release config
+      run: |
+        echo "=== release_config.mk (head) ==="
+        sed -n '1,300p' build/make/core/release_config.mk || true
+        echo
+        echo "=== .repo/manifest.xml (head) ==="
+        sed -n '1,200p' .repo/manifest.xml || true
+        echo
+        echo "=== .repo/local_manifests dir ==="
+        ls -al .repo/local_manifests || true
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+
     - name: Building recovery
       run: |
         cd "${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
@@ -141,7 +146,6 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         set -e
 
-        # Try to read add_lunch_combo entries from the device tree first, then fallback to whole tree.
         combos=$(grep -R --line-buffered "add_lunch_combo" "./${{ github.event.inputs.DEVICE_PATH }}" 2>/dev/null \
                  | sed -E 's/.*add_lunch_combo[[:space:]]*//g' \
                  | sed -E "s/['\"]//g" \
@@ -162,20 +166,17 @@ jobs:
         DESIRED="${{ github.event.inputs.MAKEFILE_NAME }}"
         LUNCH_CMD=""
 
-        # If user supplied a combo-like string with variant, use it directly
         if printf '%s\n' "$DESIRED" | grep -q -- '-'; then
           if printf '%s\n' "$combos" | grep -qx "$DESIRED"; then
             LUNCH_CMD="$DESIRED"
           fi
         else
-          # try common suffixes
           for suf in eng userdebug user; do
             if printf '%s\n' "$combos" | grep -qx "${DESIRED}-${suf}"; then
               LUNCH_CMD="${DESIRED}-${suf}"
               break
             fi
           done
-          # fallback: fuzzy match
           if [ -z "$LUNCH_CMD" ]; then
             LUNCH_CMD=$(printf '%s\n' "$combos" | grep -i "$DESIRED" | head -n1 || true)
           fi
@@ -188,15 +189,8 @@ jobs:
           exit 1
         fi
 
-        # Normalize LUNCH_CMD to product-release-variant if needed (replace only the first '_' with '-')
-        if [ -n "$LUNCH_CMD" ]; then
-          hyphen_count=$(printf '%s' "$LUNCH_CMD" | awk -F'-' '{print NF-1}')
-          if [ "$hyphen_count" -lt 2 ] && printf '%s' "$LUNCH_CMD" | grep -q '_'; then
-            NORMALIZED=$(printf '%s\n' "$LUNCH_CMD" | sed 's/_/-/')
-            echo "Normalizing lunch combo: '$LUNCH_CMD' -> '$NORMALIZED'"
-            LUNCH_CMD="$NORMALIZED"
-          fi
-        fi
+        # Do not auto-normalize underscores into hyphens. Use the combo found as-is to avoid
+        # generating a TARGET_RELEASE that doesn't exist in release_config.mk.
 
         echo "Using lunch combo: $LUNCH_CMD"
         lunch "$LUNCH_CMD" && make clean && mka adbd "${{ github.event.inputs.BUILD_TARGET }}"image -j$(nproc --all)
@@ -222,3 +216,4 @@ jobs:
           Target: ${{ github.event.inputs.BUILD_TARGET }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+</content>
